@@ -127,7 +127,7 @@ namespace LIN_sniffer
         LINSerial.setTimeout(0);
 
         //wait a calculated number of time
-        delay(LIN_MAX_FRAME_TIME);
+        delayMicroseconds(LIN_MAX_FRAME_TIME);
 
         //check how many bytes have been received
         uint8_t data_count = LINSerial.available();
