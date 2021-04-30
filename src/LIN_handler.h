@@ -30,6 +30,13 @@ enum LIN_mode_t
     reading_bytes          //reading serial bytes
 };
 
+enum LIN_loop_state_t
+{
+    initialize = 0,
+    wait_for_reading,
+    reading_delay
+};
+
 //structure to conveniently store the frames
 struct data_frame
 {
@@ -44,8 +51,9 @@ namespace LIN_sniffer
 
     //volatile variables accessed from an interrupt
     volatile LIN_mode_t LIN_mode;
+    LIN_loop_state_t LIN_state;
     volatile unsigned long break_time;
-
+    unsigned long reading_time;
     //global variables
     data_frame FRAME_MEMORY[LIN_MEM_SIZE]; //stores the last received instance of each frame id
     uint8_t frame_loop[LIN_MEM_SIZE];      //stores which frame ids have been received in this schedule loop. Duplicate id - new loop
@@ -112,89 +120,105 @@ namespace LIN_sniffer
         pinMode(LIN_RX, INPUT_PULLUP);
         frame_loop_count = 0;
         saved_frames_count = 0;
+        LIN_state = initialize;
     }
-    void loop()
+    void loop() //this function needs to be called in loop(), there can't be a long delay between calls!
     {
-        //first: activer the interrupt
-        LIN_mode = waiting_for_break;
-        attachInterrupt(LIN_RX, LIN_RX_interrupt, CHANGE);
-
-        while (LIN_mode != reading_bytes)
-            ; //the interrupt handles receiving of the break signal
-
-        //after the break signal is received, quickly turn on serial communication
-        LINSerial.begin(LIN_BAUD, SERIAL_8N1);
-        LINSerial.setTimeout(0);
-
-        //wait a calculated number of time
-        delayMicroseconds(LIN_MAX_FRAME_TIME);
-
-        //check how many bytes have been received
-        uint8_t data_count = LINSerial.available();
-        uint8_t data_count_read;
-        uint8_t data[11] = {0}; //eleven bytes is maximum (sync + pid + 8 bytes + chk)
-
-        data_count_read = LINSerial.readBytes(data, min(11, data_count));
-        //the serial communication can be stopped
-        LINSerial.end();
-
-        //analyse the received data
-
-        if (data_count_read == data_count && data_count > 1) //we need at least sync + pid!
+        switch (LIN_state)
         {
-            //we have at least pid, save this frame
-            data_frame newframe;
-            dataToFrame(newframe, data, data_count);
-            //was this id of frame received in this loop?
-            bool is_new = true;
-            for (int i = 0; i < frame_loop_count; ++i)
-            {
-                //if this id was already received in this loop - start the loop over again
-                if (frame_loop[i] == newframe.id)
-                {
-                    MarkNewLoop(frame_loop_count);
-                    frame_loop[0] = newframe.id;
-                    frame_loop_count = 1;
-                    is_new = false;
-                    break;
-                }
-            }
-            //if the frame was not received in this loop - store it
-            if (is_new)
-            {
-                frame_loop[frame_loop_count] = newframe.id;
-                ++frame_loop_count;
-            }
+        case wait_for_reading:
+        {
+            if (LIN_mode != reading_bytes)
+                break; //the interrupt handles receiving of the break signal
 
-            //Have the exact frame be already received, or one with same pid?
-            is_new = true;
-            for (int i = 0; i < saved_frames_count; ++i)
+            //after the break signal is received, quickly turn on serial communication
+            LINSerial.begin(LIN_BAUD, SERIAL_8N1);
+            LINSerial.setTimeout(0);
+            reading_time = micros();
+            LIN_state = reading_delay;
+            //no break needed
+        }
+        case reading_delay:
+        {
+            //wait a calculated number of time
+            if (micros() - reading_time <= LIN_MAX_FRAME_TIME)
+                break;
+
+            //check how many bytes have been received
+            uint8_t data_count = LINSerial.available();
+            uint8_t data_count_read;
+            uint8_t data[11] = {0}; //eleven bytes is maximum (sync + pid + 8 bytes + chk)
+
+            data_count_read = LINSerial.readBytes(data, min(11, data_count));
+            //the serial communication can be stopped
+            LINSerial.end();
+
+            //analyse the received data
+            if (data_count_read == data_count && data_count > 1) //we need at least sync + pid!
             {
-                //look for frame with the same id
-                if (newframe.id == FRAME_MEMORY[i].id)
+                //we have at least pid, save this frame
+                data_frame newframe;
+                dataToFrame(newframe, data, data_count);
+                //was this id of frame received in this loop?
+                bool is_new = true;
+                for (int i = 0; i < frame_loop_count; ++i)
                 {
-                    is_new = false;
-                    //if id is the same, what about the contents? - act accordingly
-                    if (memcmp(&newframe, FRAME_MEMORY + i, sizeof(data_frame)) == 0)
-                        MarkUnchangedFrame(newframe);
-                    else
+                    //if this id was already received in this loop - start the loop over again
+                    if (frame_loop[i] == newframe.id)
                     {
-                        //we need to save the new values!
-                        MarkChangedFrame(newframe, FRAME_MEMORY + i);
-                        memcpy(FRAME_MEMORY + i, &newframe, sizeof(data_frame));
+                        MarkNewLoop(frame_loop_count);
+                        frame_loop[0] = newframe.id;
+                        frame_loop_count = 1;
+                        is_new = false;
+                        break;
                     }
-                    break;
+                }
+                //if the frame was not received in this loop - store it
+                if (is_new)
+                {
+                    frame_loop[frame_loop_count] = newframe.id;
+                    ++frame_loop_count;
+                }
+
+                //Have the exact frame be already received, or one with same pid?
+                is_new = true;
+                for (int i = 0; i < saved_frames_count; ++i)
+                {
+                    //look for frame with the same id
+                    if (newframe.id == FRAME_MEMORY[i].id)
+                    {
+                        is_new = false;
+                        //if id is the same, what about the contents? - act accordingly
+                        if (memcmp(&newframe, FRAME_MEMORY + i, sizeof(data_frame)) == 0)
+                            MarkUnchangedFrame(newframe);
+                        else
+                        {
+                            //we need to save the new values!
+                            MarkChangedFrame(newframe, FRAME_MEMORY + i);
+                            memcpy(FRAME_MEMORY + i, &newframe, sizeof(data_frame));
+                        }
+                        break;
+                    }
+                }
+
+                //if the frame was not received before - save it
+                if (is_new)
+                {
+                    MarkNewFrame(newframe);
+                    //add frame to the list
+                    memcpy(FRAME_MEMORY + saved_frames_count, &newframe, sizeof(data_frame));
+                    ++saved_frames_count;
                 }
             }
-
-            //if the frame was not received before - save it
-            if (is_new)
-            {
-                MarkNewFrame(newframe);
-                //add frame to the list
-                memcpy(FRAME_MEMORY + saved_frames_count, &newframe, sizeof(data_frame));
-                ++saved_frames_count;
-            }
+            //no need for break or changing the state - just initialize again
+        }
+        case initialize:
+        {
+            //first: activer the interrupt
+            LIN_mode = waiting_for_break;
+            attachInterrupt(LIN_RX, LIN_RX_interrupt, CHANGE);
+            LIN_state = wait_for_reading;
+        }
         }
     }
 };
