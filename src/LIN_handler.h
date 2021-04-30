@@ -1,6 +1,10 @@
 #pragma once
 #include "Arduino.h"
 
+//TODO:
+//- baudrate change
+//- stopping and starting reception
+
 //these two defines choose which serial port of the Due is used.
 //They need to match!
 #define LINSerial Serial1
