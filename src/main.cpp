@@ -5,14 +5,15 @@
 
 #define SERIAL_BAUD 115200 //the baudrate used when communicating with a computer
 
-enum frame_option{
-    ignore = 0,
-    never,
-    change,
-    always
+enum frame_option_t
+{
+    option_undefined = 0,
+    option_never,
+    option_change,
+    option_always
 };
 
-String HexToString(const uint8_t byte, bool leading_zero = true)
+String HexToString(const uint8_t byte, const bool leading_zero = true)
 {
     String temp = "";
     if (leading_zero && byte <= 0x0F)
@@ -21,7 +22,7 @@ String HexToString(const uint8_t byte, bool leading_zero = true)
     return temp;
 }
 
-String frameToString(data_frame frame, bool if_chk = true)
+String frameToString(const data_frame frame, const bool if_chk = true)
 {
     String out = HexToString(frame.id) + " | ";
     for (int i = 0; i < frame.data_count; ++i)
@@ -31,17 +32,12 @@ String frameToString(data_frame frame, bool if_chk = true)
     return out;
 }
 
-void setBaudrate(long baud)
+void setBaudrate(const long baud)
 {
     //TODO
 }
 
-void ignoreFrame(uint8_t id)
-{
-    //TODO
-}
-
-void unignoreFrame(uint8_t id)
+void setFrameOption(const uint8_t id, const frame_option_t option)
 {
     //TODO
 }
@@ -139,51 +135,93 @@ void parseSerial()
                 stopSniffing();
                 Serial.println("Stopped sniffing the LIN bus.");
             }
-            else if (len == 6 && !memcmp(command_word, "show", 4))
+            else if (len == 4 && !memcmp(command_word, "show", 4))
             {
                 command_word = strtok(NULL, " ");
                 if (command_word != NULL)
                 {
+                    //OPTIONS: never, change, always
+                    frame_option_t option = option_undefined;
                     len = strlen(command_word);
-                    if (len == 3 && !memcmp(command_word, "all", 3))
+                    if (len == 5 && !memcmp(command_word, "never", 5))
+                        option = option_never;
+                    else if (len == 6 && !memcmp(command_word, "change", 6))
+                        option = option_change;
+                    else if (len == 6 && !memcmp(command_word, "always", 6))
+                        option = option_always;
+                    if (option != option_undefined)
                     {
-                        for (uint8_t i = 0; i < LIN_MEM_SIZE; ++i)
-                            ignoreFrame(i);
-                        Serial.println("TODO");
-                    }
-                    else //ignore some frames
-                        while (command_word != NULL)
+                        command_word = strtok(NULL, " ");
+                        if (command_word != NULL)
                         {
                             len = strlen(command_word);
-                            bool alphanumeric = true;
-                            for (uint8_t i = 0; i < len; ++i)
-                                alphanumeric &= isHexadecimalDigit(command_word[i]);
-                            if (alphanumeric)
+                            if (len == 3 && !memcmp(command_word, "all", 3))
                             {
-                                long id = strtol(command_word, NULL, 16);
-                                if (((id >= 1 && id <= 0x3F) || (id == 0 && command_word[0] == '0')))
+                                for (uint8_t i = 0; i < LIN_MEM_SIZE; ++i)
+                                    setFrameOption(i, option);
+                                switch (option)
                                 {
-                                    ignoreFrame(id);
-                                    Serial.print("Frame ID ");
-                                    Serial.print(HexToString(id, HEX));
-                                    Serial.println(" is being TODO.");
-                                }
-                                else
-                                {
-                                    Serial.print(command_word);
-                                    Serial.println(" is not a correct frame ID.");
+                                case option_never:
+                                    Serial.println("All frames are set to never show.");
+                                    break;
+                                case option_change:
+                                    Serial.println("All frames are set to show on change.");
+                                    break;
+                                case option_always:
+                                    Serial.println("All frames are set to always show.");
+                                    break;
                                 }
                             }
-                            else
-                            {
-                                Serial.print(command_word);
-                                Serial.println(" is not a hexadecimal frame ID.");
-                            }
-                            command_word = strtok(NULL, " ");
+                            else //ignore some frames
+                                while (command_word != NULL)
+                                {
+                                    len = strlen(command_word);
+                                    bool alphanumeric = true;
+                                    for (uint8_t i = 0; i < len; ++i)
+                                        alphanumeric &= isHexadecimalDigit(command_word[i]);
+                                    if (alphanumeric)
+                                    {
+                                        long id = strtol(command_word, NULL, 16);
+                                        if (((id >= 1 && id <= 0x3F) || (id == 0 && command_word[0] == '0')))
+                                        {
+                                            setFrameOption(id, option);
+                                            Serial.print("Frame ID ");
+                                            Serial.print(HexToString(id, HEX));
+                                            switch (option)
+                                            {
+                                            case option_never:
+                                                Serial.println(" is set to never show.");
+                                                break;
+                                            case option_change:
+                                                Serial.println(" is set to show on change.");
+                                                break;
+                                            case option_always:
+                                                Serial.println(" is set to always show.");
+                                                break;
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Serial.print(command_word);
+                                            Serial.println(" is not a correct frame ID.");
+                                        }
+                                    }
+                                    else
+                                    {
+                                        Serial.print(command_word);
+                                        Serial.println(" is not a hexadecimal frame ID.");
+                                    }
+                                    command_word = strtok(NULL, " ");
+                                }
                         }
+                        else
+                            Serial.println("Specify IDs of frames or use toe option 'all'.");
+                    }
+                    else
+                        Serial.println("Specify 'never'/'change'/'always' after the show command.");
                 }
                 else
-                    Serial.println("TODO");
+                    Serial.println("Specify 'never'/'change'/'always' after the show command, followed by 'all' or IDs of frames.");
             }
             else
             {
