@@ -8,9 +8,7 @@
 //these two defines choose which serial port of the Due is used.
 //They need to match!
 #define LINSerial Serial1
-#define LIN_RX 19
-
-#define LIN_BAUD 9600
+#define LIN_RX digitalPinToInterrupt(19)
 
 #define LIN_MEM_SIZE 64 //Defines the maximum number of unique frame indentifiers saved (only 64 possible)
 
@@ -21,10 +19,10 @@
 //Assuming N(bytes) = 8 (max for LIN)
 //T(frame)max = T(bit) * 154 = 154000000L / LIN_BAUD
 //for 9600 baud, that is 16ms
-#define LIN_MAX_FRAME_TIME 154000000L / LIN_BAUD
+#define LIN_MAX_FRAME_TIME 154000000UL / LIN_BAUD
 
 //the break field is at least the length of 11 bits
-#define LIN_MIN_BREAK_TIME 11000000L / LIN_BAUD
+#define LIN_MIN_BREAK_TIME 11000000UL / LIN_BAUD
 
 //enum used to differenciate between states of LIN reception
 enum LIN_mode_t
@@ -38,7 +36,8 @@ enum LIN_loop_state_t
 {
     initialize = 0,
     wait_for_reading,
-    reading_delay
+    reading_delay,
+    stopped
 };
 
 //structure to conveniently store the frames
@@ -52,7 +51,7 @@ struct data_frame
 
 namespace LIN_sniffer
 {
-
+    long LIN_BAUD = 19200;
     //volatile variables accessed from an interrupt
     volatile LIN_mode_t LIN_mode;
     LIN_loop_state_t LIN_state;
@@ -104,6 +103,15 @@ namespace LIN_sniffer
                     //the interrupt is turned off when reading bytes!
         }
     };
+    void reset()
+    {
+        frame_loop_count = 0;
+        saved_frames_count = 0;
+        if(LIN_state == reading_delay){
+            LINSerial.end();
+        }
+        LIN_state = stopped;
+    }
     void dataToFrame(data_frame &frame, uint8_t *data, uint8_t data_count)
     {
         frame.id = data[1] & 0x3F;
@@ -115,16 +123,14 @@ namespace LIN_sniffer
             memcpy(frame.data, data + 2, frame.data_count);
         }
     }
-    void begin(void (*_MarkNewLoop)(uint8_t) = nullptr, void (*_MarkNewFrame)(data_frame &) = nullptr, void (*_MarkChangedFrame)(data_frame &, data_frame *) = nullptr, void (*_MarkUnchangedFrame)(data_frame &) = nullptr)
+    void init(void (*_MarkNewLoop)(uint8_t) = nullptr, void (*_MarkNewFrame)(data_frame &) = nullptr, void (*_MarkChangedFrame)(data_frame &, data_frame *) = nullptr, void (*_MarkUnchangedFrame)(data_frame &) = nullptr)
     {
         MarkNewLoop = _MarkNewLoop;
         MarkNewFrame = _MarkNewFrame;
         MarkChangedFrame = _MarkChangedFrame;
         MarkUnchangedFrame = _MarkUnchangedFrame;
         pinMode(LIN_RX, INPUT_PULLUP);
-        frame_loop_count = 0;
-        saved_frames_count = 0;
-        LIN_state = initialize;
+        reset();
     }
     void loop() //this function needs to be called in loop(), there can't be a long delay between calls!
     {
@@ -222,6 +228,12 @@ namespace LIN_sniffer
             LIN_mode = waiting_for_break;
             attachInterrupt(LIN_RX, LIN_RX_interrupt, CHANGE);
             LIN_state = wait_for_reading;
+            break;
+        }
+        case stopped:
+        {
+            //do nothing!
+            break;
         }
         }
     }
